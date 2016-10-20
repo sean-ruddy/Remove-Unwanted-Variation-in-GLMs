@@ -526,7 +526,7 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
             de2Fun <- function(counts, x1, x2, W, groups, fdr, coef)
                      {
                         D=cbind(x1,x2,W)
-                        dds <- DESeqDataSetFromMatrix(counts, DataFrame(groups), ~ groups)
+                        suppressMessages(dds <- DESeqDataSetFromMatrix(counts, DataFrame(groups), ~ groups))
                         suppressMessages(dds <- estimateSizeFactors(dds))
                         suppressMessages(dds <- estimateDispersions(dds, fitType = "parametric", quiet = TRUE, modelMatrix = D))
                         suppressMessages(dds <- nbinomWaldTest(dds, betaPrior = FALSE, quiet = TRUE, modelMatrix = D, useT=TRUE, df=ncol(counts)-ncol(D)))
