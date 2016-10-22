@@ -360,11 +360,11 @@ getW <- function( counts , cIdx, k , x1=NULL, x2=NULL,
          }
 
 
-getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deMethod=c("edgeR","voom","empvar","lm","limma","deseq2","wald"),use.weights=FALSE)
+getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deMethod=c("edgeR","voom","empvar","lm","limma","deseq2","evGLM"),use.weights=FALSE,deFun=NULL)
           {
-
-            deMethod = match.arg(deMethod,c("edgeR","voom","empvar","lm","limma","deseq2","wald"))
-            eRFun <- function(counts, x1, x2, W, groups, fdr, coef)
+            deMethod = match.arg(deMethod,c("edgeR","voom","empvar","lm","limma","deseq2","evGLM"))
+            if( deMethod == "evGLM" & is.null(deFun) ) stop("Must supply 'deFun'")
+            eRFun <- function(counts, x1, x2, W, groups, fdr, coef, empvar=FALSE)
                       {
                           D=cbind(x1,x2,W)
                           y <- DGEList(counts = counts, group = groups)
@@ -372,6 +372,9 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                           y <- estimateGLMCommonDisp(y, D)
                           y <- estimateGLMTagwiseDisp(y, D)
                           fit <- glmFit(y, D)
+                          b <- fit$coefficients[,coef]
+                          s2 <- fit$deviance
+                          if( empvar ) return(cbind("beta"=b,"betavar"=s2))
                           lrt <- glmLRT(fit, coef=coef)
                           tbl <- topTags(lrt, n=Inf)$table
                           pvals <- tbl$PValue
@@ -392,7 +395,7 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                           pvals <- pvals[rownames(counts)]
                           return( list( "Pvals" = pvals , "PosDE" = posDE , "PosRank" = posAll ) )
                       }
-            vFun <- function(counts, x1, x2, W, fdr, coef)
+            vFun <- function(counts, x1, x2, W, groups=NULL, fdr, coef, empvar=FALSE)
                      {
                         D=cbind(x1,x2,W)
                         dge <- DGEList(counts=counts)
@@ -400,6 +403,10 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         v=voom(dge,D)
                         fit=lmFit(v,D)
                         fit2 = eBayes(fit)
+                        b <- fit$coef[,coef]
+                        s2 <- fit2$s2.post
+                        names(s2) <-names(b)
+                        if( empvar ) return(cbind("beta"=b,"betavar"=s2))
                         tbl <- topTable(fit2,coef=coef,number=nrow(counts),sort.by="P")
                         pvals <- tbl$P.Value
                         names(pvals) <- rownames(tbl)
@@ -461,7 +468,7 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                             pvals <- pvals[rownames(counts)]
                             return( list( "Pvals" = pvals , "PosDE" = posDE , "PosRank" = posAll ) )
                          }
-            lmFun <- function(counts, x1, x2, W, fdr, coef)
+            lmFun <- function(counts, x1, x2, W, groups=NULL, fdr, coef, empvar=FALSE)
                      {
                         n = nrow(counts)
                         p = ncol(x1)
@@ -471,11 +478,12 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         Y <- log2(t(counts+0.5)/(lib.size+1)*1e+06) #this is the transformation that voom uses
                         D = cbind(x1, x2, W)
                         fit=lmFit(t(Y),D,weights=NULL) #same as lm(transformed_counts~D, weights=weights)
-                        betahat=t(fit$coefficients)[coef,]
-                        sigma2 = fit$sigma^2 #verified that this is the true sigma ie sqrt(sum(w*r^2)/df), where df = nsmp - ncol(D)
+                        b=t(fit$coefficients)[coef,]
+                        s2 = fit$sigma^2 #verified that this is the true sigma ie sqrt(sum(w*r^2)/df), where df = nsmp - ncol(D)
+                        if( empvar ) return(cbind("beta"=b,"betavar"=s2))
                         df = fit$df.residual
-                        varbetahat <- diag(fit$cov.coefficients)[coef] * sigma2
-                        tvals = betahat/sqrt(varbetahat)
+                        varb <- diag(fit$cov.coefficients)[coef] * s2
+                        tvals = b/sqrt(varb)
                         pvals = 2 * pt(-abs(tvals), df)
                         p.adj <- p.adjust(pvals,method="BH")
                         de <- names(p.adj)[p.adj<=fdr]
@@ -494,7 +502,7 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         pvals <- pvals[rownames(counts)]
                         return( list( "Pvals" = pvals , "PosDE" = posDE , "PosRank" = posAll ) )
                      }
-            limmaFun <- function(counts, x1, x2, W, fdr, coef)
+            limmaFun <- function(counts, x1, x2, W, groups=NULL, fdr, coef, empvar=FALSE)
                      {
                         n = nrow(counts)
                         p = ncol(x1)
@@ -505,6 +513,10 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         D = cbind(x1, x2, W)
                         fit=lmFit(t(Y),D,weights=NULL) #same as lm(transformed_counts~D, weights=weights)
                         fit2 <- ebayes(fit)
+                        b <- fit$coefficients[,coef]
+                        s2 <- fit2$s2.post
+                        names(s2) <-names(b)
+                        if( empvar ) return(cbind("beta"=b,"betavar"=s2))
                         pvals <- fit2$p.value[,coef]
                         padj <- p.adjust(pvals,method="BH")
                         de <- names(padj[padj<=fdr])
@@ -523,7 +535,7 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         pvals <- pvals[rownames(counts)]
                         return( list( "Pvals" = pvals , "PosDE" = posDE , "PosRank" = posAll ) )
                      }
-            de2Fun <- function(counts, x1, x2, W, groups, fdr, coef)
+            de2Fun <- function(counts, x1, x2, W, groups, fdr, coef, empvar=FALSE)
                      {
                         D=cbind(x1,x2,W)
                         suppressMessages(dds <- DESeqDataSetFromMatrix(counts, DataFrame(groups), ~ groups))
@@ -536,6 +548,9 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         b <- mcols(dds)[,wh.coef]
                         stats <- mcols(dds)[,wh.stat]
                         s2 <- mcols(dds)[,wh.SE]^2
+                        names(b) <- rownames(counts)
+                        names(s2) <- rownames(counts)
+                        if( empvar ) return(cbind("beta"=b,"betavar"=s2))
                         varb.ev <- get_empirical_variances(s2,b,rescaleconst=0.688888)
                         wald <- stats
                         wald.ev <- b/sqrt(varb.ev)
@@ -550,24 +565,18 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
                         names(pvalsT.ev) <- rownames(counts)
                         return( list( "PvalsZ" = pvalsZ,  "PvalsT" = pvalsT,  "PvalsZ.ev" = pvalsZ.ev,  "PvalsT.ev" = pvalsT.ev ) )
                      }
-            waldFun <- function(counts, x1, x2, W, groups, fdr, coef) #de2 does this already
+            evGLMFun <- function(counts, x1, x2, W, groups, fdr, coef, deFun=c("eR","v","de2","lm","limma"))
                      {
-                        D=cbind(x1,x2,W)
-                        dds <- DESeqDataSetFromMatrix(counts, DataFrame(groups), ~ groups)
-                        suppressMessages(dds <- estimateSizeFactors(dds))
-                        suppressMessages(dds <- estimateDispersions(dds, fitType = "parametric", quiet = TRUE, modelMatrix = D))
-                        suppressMessages(dds <- nbinomWaldTest(dds, betaPrior = FALSE, quiet = TRUE, modelMatrix = D, useT=TRUE, df=ncol(counts)-ncol(D)))
-                        wh.coef <- paste0("SE_",resultsNames(dds)[coef])
-                        s2 <- mcols(dds)[,wh.coef]^2
-                        b <- mcols(dds)[,resultsNames(dds)[coef]]
+                        deFun = paste0(match.arg(deFun,c("eR","v","de2","lm","limma")),"Fun")
+                        arguments = "(counts=counts,x1=x1,x2=x2,W=W,groups=groups,fdr=fdr,coef=coef,empvar=TRUE)"
+                        out <- eval(parse(text = paste0(deFun,arguments)))
+                        b <- out[,"beta"]
+                        s2 <- out[,"betavar"]
                         varb.ev <- get_empirical_variances(s2,b,rescaleconst=0.688888)
                         wald.ev <- b/sqrt(varb.ev)
-                        df = nrow(D) - ncol(D)
-                        pvalsZ <- 2*pnorm(abs(wald.ev),lower.tail=FALSE)
-                        pvalsT <- 2*pt(abs(wald.ev),df=df,lower.tail=FALSE)
-                        names(pvalsZ) <- rownames(counts)
-                        names(pvalsT) <- rownames(counts)
-                        return( list( "PvalsZ" = pvalsZ , "PvalsT"=pvalsT ) )
+                        pvals <- 2*pnorm(abs(wald.ev),lower.tail=FALSE)
+                        names(pvals) <- rownames(counts)
+                        return( list( "Pvals" = pvals , "PosDE" = NULL , "PosRank" = NULL ) )
                      }
 
             if( is.null(x2) ) x2 = matrix(1,nc=1,nr=ncol(counts))
@@ -586,8 +595,8 @@ getDE <- function(counts,x1,x2=NULL,W,groups=NULL,fdr=0.05,coef=1,pIdx=NULL, deM
              out <- limmaFun(counts=counts, x1=x1, x2=x2, W=W, fdr=fdr, coef=coef)
             else if( deMethod=="deseq2" )
              out <- de2Fun(counts=counts, x1=x1, x2=x2, W=W, groups=groups, fdr=fdr, coef=coef)
-            else if( deMethod=="wald" )
-             out <- waldFun(counts=counts, x1=x1, x2=x2, W=W, groups=groups, fdr=fdr, coef=coef)
+            else if( deMethod=="evGLM" )
+             out <- evGLMFun(counts=counts, x1=x1, x2=x2, W=W, groups=groups, fdr=fdr, coef=coef, deFun=deFun)
             else stop("not a valid 'deMethod' input")
 
             return(out)
